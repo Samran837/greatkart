@@ -1,10 +1,11 @@
 from django.contrib import messages, auth
 
-from django.shortcuts import redirect, render
-from accounts.models import Account
+from django.shortcuts import get_object_or_404, redirect, render
+from accounts.models import Account, UserProfile
 from carts.models import Cart, CartItem
 from carts.views import _cart_id
-from .forms import UserRegistrationForm
+from orders.models import Order
+from .forms import UserRegistrationForm, UserForm, UserProfileForm
 from django.contrib.auth.decorators import login_required
 
 # Email verification imports
@@ -146,7 +147,16 @@ def activate(request, uidb64, token):
 
 @login_required(login_url='login')
 def dashboard(request):
-    return render(request, 'accounts/dashboard.html')
+    orders = Order.objects.order_by('-created_at').filter(user_id=request.user.id, is_ordered=True)
+    order_count = orders.count()
+
+    userprofile = get_object_or_404(UserProfile, user=request.user)
+    context = {
+        'order_count': order_count,
+        'userprofile': userprofile,
+    }
+    return render(request, 'accounts/dashboard.html', context)
+
 
 
 def forgotpassword(request):
@@ -208,4 +218,80 @@ def resetpassword(request):
     else:
         return render(request, 'accounts/resetpassword.html')
     
+
+def my_orders(request):
+    orders = Order.objects.filter(user=request.user, is_ordered=True).order_by('-created_at')
+    context = {
+        'orders': orders,
+    }
+    return render(request, 'accounts/my_orders.html', context)
+
+@login_required(login_url='login')
+def edit_profile(request):
+    userprofile = get_object_or_404(UserProfile, user=request.user)
+
+    if request.method == 'POST':
+        if 'profile_picture' in request.FILES:
+            # This POST came from the "Change photo" form only
+            profile_form = UserProfileForm(request.POST, request.FILES, instance=userprofile)
+            if profile_form.is_valid():
+                profile_form.save()
+                messages.success(request, 'Your profile picture has been updated.')
+            return redirect('edit_profile')
+        else:
+            # This POST came from the main "Edit Profile" form
+            user_form = UserForm(request.POST, instance=request.user)
+            profile_form = UserProfileForm(request.POST, instance=userprofile)
+            if user_form.is_valid() and profile_form.is_valid():
+                user_form.save()
+                profile_form.save()
+                messages.success(request, 'Your profile has been updated successfully.')
+            return redirect('edit_profile')
+    else:
+        user_form = UserForm(instance=request.user)
+        profile_form = UserProfileForm(instance=userprofile)
+
+    context = {
+        'user_form': user_form,
+        'profile_form': profile_form,
+        'userprofile': userprofile,
+    }
+    return render(request, 'accounts/edit_profile.html', context)
     
+@login_required(login_url='login')
+def change_password(request):
+    if request.method == 'POST':
+        current_password = request.POST['current_password']
+        new_password = request.POST['new_password']
+        confirm_password = request.POST['confirm_password']
+
+        user = Account.objects.get(username__exact=request.user.username)
+
+        if new_password == confirm_password:
+            success = user.check_password(current_password)
+            if success:
+                user.set_password(new_password)
+                user.save()
+                messages.success(request, 'Password updated successfully.')
+                return redirect('change_password')
+            else:
+                messages.error(request, 'Please enter valid current password')
+                return redirect('change_password')
+        else:
+            messages.error(request, 'Password does not match!')
+            return redirect('change_password')
+    return render(request, 'accounts/change_password.html')   
+
+
+@login_required(login_url='login')
+def order_detail(request, order_id):
+    order_detail = Order.objects.get(order_number=order_id, user=request.user)
+    ordered_products = order_detail.orderproduct_set.all()
+    payment = order_detail.payment
+
+    context = {
+        'order': order_detail,
+        'ordered_products': ordered_products,
+        'payment': payment,
+    }
+    return render(request, 'accounts/order_detail.html', context)
